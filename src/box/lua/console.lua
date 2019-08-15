@@ -158,6 +158,27 @@ local function current_output()
     return d
 end
 
+local function current_eos()
+    local d = current_output()
+    return output_eos[d["fmt"]]
+end
+
+--
+-- Map output format into a "\set" command.
+local function output_cmd_string()
+    local d = current_output()
+    if d["fmt"] == "yaml" then
+        return "\\set output yaml"
+    elseif d["fmt"] == "lua" then
+        local cmd = "\\set output lua"
+        if d["opts"] == "block" then
+            cmd = cmd .. ",block"
+        end
+        return cmd
+    end
+    return ""
+end
+
 local function format(status, ...)
     local d = current_output()
     return output_handlers[d["fmt"]](status, d["opts"], ...)
@@ -341,15 +362,33 @@ local text_connection_mt = {
         -- @retval     nil Error.
         --
         read = function(self)
-            local ret = self._socket:read(YAML_TERM)
+            local ret = self._socket:read(self.eos)
             if ret and ret ~= '' then
                 return ret
+            end
+        end,
+        --
+        -- The command might modify EOS so
+        -- we have to parse and preprocess it
+        -- first to not stuck in :read() forever.
+        preprocess_eval = function(self, text)
+            local command = get_command(text)
+            if command == nil then
+                return
+            end
+            local nr_items, items = parse_operators(command)
+            if nr_items == 3 then
+                local err, fmt, opts = output_parse(items[3])
+                if not err then
+                    self.eos = output_eos[fmt]
+                end
             end
         end,
         --
         -- Write + Read.
         --
         eval = function(self, text)
+            self:preprocess_eval(text)
             text = text..'$EOF$\n'
             if not self:write(text) then
                 error(self:set_error())
@@ -404,9 +443,14 @@ local function wrap_text_socket(connection, url, print_f)
         host = url.host or 'localhost',
         port = url.service,
         print_f = print_f,
+        eos = current_eos(),
     }, text_connection_mt)
-    if not conn:write('require("console").delimiter("$EOF$")\n') or
-       not conn:read() then
+    local cmd_set_output = output_cmd_string() .. '\n'
+    local cmd_delimiter = 'require("console").delimiter("$EOF$")\n'
+    if not conn:write(cmd_set_output) or not conn:read() then
+        conn:set_error()
+    end
+    if not conn:write(cmd_delimiter) or not conn:read() then
         conn:set_error()
     end
     return conn
