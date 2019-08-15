@@ -150,11 +150,16 @@ local function output_save(fmt, opts)
     }
 end
 
-local function format(status, ...)
+local function current_output()
     local d = box.session.storage.console_output_format
     if d == nil then
-        d = default_output_format
+        return default_output_format
     end
+    return d
+end
+
+local function format(status, ...)
+    local d = current_output()
     return output_handlers[d["fmt"]](status, d["opts"], ...)
 end
 
@@ -245,19 +250,38 @@ local operators = {
     q = quit
 }
 
-local function preprocess(storage, line)
+local function parse_operators(line)
     local items = {}
     for item in string.gmatch(line, '([^%s]+)') do
         items[#items + 1] = item
     end
     if #items == 0 then
-        return help_wrapper()
+        return 0, nil
     end
     if operators[items[1]] == nil then
+        return #items, nil
+    end
+    return #items, items
+end
+
+local function preprocess(storage, line)
+    local nr_items, items = parse_operators(line)
+    if nr_items == 0 then
+        return help_wrapper()
+    end
+    if items == nil then
         local msg = "Invalid command \\%s. Type \\help for help."
         return format(false, msg:format(items[1]))
     end
     return operators[items[1]](storage, unpack(items))
+end
+
+local function get_command(line)
+    -- All commands start with the escape symbol
+    if line:sub(1, 1) == '\\' then
+        return line:sub(2)
+    end
+    return nil
 end
 
 --
@@ -267,8 +291,9 @@ local function local_eval(storage, line)
     if not line then
         return nil
     end
-    if line:sub(1, 1) == '\\' then
-        return preprocess(storage, line:sub(2))
+    local command = get_command(line)
+    if command then
+        return preprocess(storage, command)
     end
     if storage.language == 'sql' then
         return format(pcall(box.execute, line))
