@@ -46,6 +46,17 @@ output_handlers["lua"] = function(status, opts, ...)
     if not ... then
         return ""
     end
+    -- Map internal symbols in case if they are
+    -- not inside tables and serpent won't handle
+    -- them properly.
+    local map_direct_symbols = {
+        [box.NULL]      = 'box.NULL',
+    }
+    for k,v in pairs(map_direct_symbols) do
+        if k == ... then
+            return v .. output_eos["lua"]
+        end
+    end
     --
     -- Map internal symbols which serpent doesn't know
     -- about to a known representation.
